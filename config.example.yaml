@@ -1,0 +1,13 @@
+# 小红书收藏 → Obsidian 导出配置（示例）
+# 复制为 config.yaml 后填写你自己的路径
+output_dir: "F:/Obsidian/小红书"   # 你的 Obsidian vault 目录或子目录
+cookie_file: "secrets/cookies.json"
+
+rate:
+  min_delay: 2        # 请求间隔下限（秒）
+  max_delay: 5        # 请求间隔上限（秒，随机）
+  max_per_min: 20     # 滑动窗口：60s 内最多请求数（远低于 100/分触发线）
+
+image:
+  max_width: 720      # 图片下载最大宽度（省空间）；可调 1080
+  format: webp

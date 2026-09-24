@@ -1,0 +1,18 @@
+# 凭证与本地状态（切勿提交）
+secrets/
+*.json
+state.json
+config.yaml
+
+# 日志与临时文件
+_*.log
+*.log
+
+# 导出产物（用户本地 vault 数据，通常位于仓库外的 output_dir）
+images/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/

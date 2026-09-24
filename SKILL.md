@@ -1,67 +1,43 @@
 ---
 name: xhs-favorites-to-obsidian
-description: 纯 Python、零浏览器（无 Chromium/Playwright）把小红书收藏夹（图文+视频）导出为 Obsidian Markdown 的流水线。覆盖 cookie 获取、x-s/x-t 签名、收藏枚举、笔记详情、图片 webp 本地化、风控限速。当用户说"导出小红书收藏""整理小红书收藏到 Obsidian""小红书收藏批量抓取"时使用。适用场景：用户不想装浏览器自动化、C 盘空间紧张、要进 Obsidian 知识库逐个学习整理。
+description: 纯 Python 零浏览器把小红书收藏/搜索/动态/发现/关注导出为 Obsidian 笔记（可配置、可插拔采集）。当用户想把小红书内容导出到 Obsidian、整理收藏、批量抓取笔记，或问"不装浏览器怎么抓小红书"时使用。
 ---
 
-# 小红书收藏 → Obsidian 导出流水线（纯 Python 无浏览器）
+# xhs-favorites-to-obsidian
 
-## 何时用
-- 用户要把小红书**自己的收藏**整理进 Obsidian（逐个学习/分类），但**不想装浏览器/Chromium**、空间紧张。
-- 不要用于爬取他人内容、评论、私页——仅本人收藏。
+## 何时使用
+- 用户想把小红书内容（收藏/搜索/动态/发现/关注）导出成 Obsidian 可读的 Markdown。
+- 用户强调**不想装浏览器、不想做浏览器自动化、电脑空间不够**。
+- 用户已授权运行脚本（需在 WorkBuddy Agent 模式下，且明确允许执行）。
 
-## 核心架构（4 层）
-1. **登录态**：从已登录浏览器取 `web_session` + `a1`（一次性，约 1 年有效）。不下载任何东西。
-2. **签名**：纯 Python `xhshow` 库（`pip install xhshow`）本地算 `x-s/x-t/x-s-common`，**无需浏览器/JS 运行时**。
-3. **请求**：`curl_cffi`（Chrome 131 指纹 impersonate）发 HTTP——**不能**用 `requests`，会被 Shield 按 JA3 指纹拉黑返回 461/412。
-4. **导出**：枚举收藏 → 图文取详情+图片转 webp 本地化；视频仅存元数据 → 写 Obsidian MD（YAML frontmatter + `![[...]]` 嵌入）。
+## 核心约束（务必遵守）
+- **零浏览器**：只用 `curl_cffi`（Chrome 指纹）+ `xhshow`（纯 Python 签名）。**绝不**安装 Chromium / Playwright。
+- **不爬他人隐私**：仅本人收藏/动态 + 公开内容。
+- **Cookie 安全**：存 `secrets/cookies.json`，gitignore 排除，不硬编码、不提交。
 
-## 关键接口（已验证，非臆测）
-- **取自己 user_id**：`GET https://edith.xiaohongshu.com/api/sns/web/v2/user/me`，带签名+cookie，返回 `data.user_id`。
-- **枚举收藏**：`GET https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page`
-  - query: `num=30&cursor=<上页cursor>&image_formats=webp&user_id=<uid>`
-  - 响应数据在 **`data.notes`**（不是 items/cards）；翻页用 `data.has_more` + `data.cursor`。
-  - 每条 `type`：`normal`=图文，`video`=视频。
-- **笔记详情（图文取正文/图片用）**：**`POST https://edith.xiaohongshu.com/api/sns/web/v1/feed`**
-  - body（JSON）：`{"source_note_id": <id>, "xsec_token": <token>, "xsec_source": "pc_feed", "image_formats": "webp"}`
-  - ⚠️ 字段是 **`source_note_id`** 不是 `note_id`；用 GET `/v2/note/{id}` 会 404。
-  - 返回 `data.note`：`desc`(正文)、`image_list`(`info_list[].url` 取 webp)、`tag_list`、`interact_info`(liked_count/collected_count)。
-  - 签名用 xhshow 的 **`sign_headers_post`**（不是 sign_headers_get）。
-- 每条收藏的 `xsec_token` 从 `data.notes[].xsec_token` 拿，调详情时必传。
+## 已验证可用的端点（实测 code=0）
+- 收藏：`GET /api/sns/web/v2/note/collect/page`（user_id + cursor）
+- 详情：`POST /api/sns/web/v1/feed`（source_note_id + xsec_token）
+- 搜索：**POST** `/v1/search/notes`（keyword/page/page_size/search_id/sort/note_type/image_formats）
+- 动态：`GET /v1/user_posted`（user_id + num + cursor）
+- 发现/推荐：`POST /v1/homefeed`（search_page_request_source=discover_feed）
+- 关注流：`POST /v1/homefeed`（search_page_request_source=following）
+- 视频地址：详情 `video.media_v2`（JSON 字符串）→ `stream.h264[0].master_url`
 
-## Cookie 处理（踩坑点）
-- `web_session` 是 **httpOnly**，DevTools Console 的 `document.cookie` 取不到 → 必须走 DevTools→Application→Cookies 面板，或 Cookie-Editor 扩展，或本地解密脚本（见下）。
-- **请求必须显式把 web_session/a1 写进 Cookie 头**，且 domain 设 `.xiaohongshu.com`（否则发不到 edith 子域）。
-- **curl_cffi cookie 冲突**：`acw_tc` 在 www/edith 两域各一份会报 "Multiple cookies exist with name=acw_tc"。修复：每次请求**显式传 `cookies=ck` dict** + 请求后 `s.cookies.clear()`，以 ck 为唯一来源；ck 含 web_session/a1/webId，从响应刷新 acw_tc。
-- 设备指纹稳定：首页 `GET https://www.xiaohongshu.com` 初始化一次拿 `webId/gid`，整会话复用，别每次重置。
+## 运行流程
+1. 确认有 `secrets/cookies.json`（web_session + a1 + user_id）。没有则 `python src/extract_edge_cookies.py`（需浏览器未锁 Cookie 库）或手动从 DevTools 复制。
+2. `cp config.example.yaml config.yaml`，按需改 `output_dir` 与开启的 `collectors`。
+3. `python -m src.main`（或带 CLI 覆盖，如 `--collectors.search.enabled true --collectors.search.keywords "AI"`）。
+4. 产物在 `output_dir`：每篇一个 `.md`（YAML frontmatter + 正文 + `![[图片]]`），`index.md` 按分类分组，图片在 `images/`，视频在 `videos/`。
 
-## 风控（必做，否则封号/限流）
-- 单线程；随机延迟 **2–5 秒**（不是固定间隔，去机械性）。
-- 滑动窗口 **≤20 次/分**（远低于 100/分触发线）。
-- cursor **顺序**翻页，不跳页、不并发。
-- 本人住宅 IP + 本人收藏 → 风险低（最糟是限流/滑块，非封号）。
-- 遇 `412/461/300012` 指数退避，连败 3 次暂停。
-- `state.json` 存 cursor + 已导出 id 支持**断点续传**。
+## 关键解析注意
+- favorites / user_posted：note_id、xsec_token、display_title、type、user 直接在 item 顶层。
+- search / homefeed：顶层 `id`=note_id、`xsec_token` 顶层；正文在 `note_card` 内；homefeed 的 note_card **无 image_list**，需调详情拿图。
+- 视频：详情里 `video.media_v2` 是 JSON 字符串，`stream.h264[0].master_url` 才是播放地址。
 
-## 输出格式（Obsidian 友好）
-- 图文 MD：`status: unstudied` / `category: 待分类` / `resourceId` / `author` / `link` / `tags` / `liked_count` / `collected_count` / `xsec_token`；正文 + `![[images/xxx.webp]]`。
-- 视频 MD：仅 `title/link/author/type/status` + 说明"按需求仅存元数据不下载视频"。
-- 图片转 **webp**（默认 1080 宽，C 盘紧可降 720），用 `![[...]]` 内联。
-- 生成 `index.md` 总索引（每条一行链接）。
-- 配合 Obsidian + Dataview 按 `status` 建"待学/已学"看板。
+## 风控默认（安全）
+- 20 次/分 + 随机 2–5s + 单线程 + 顺序翻页 + 固定指纹 + 断点续传。可调高但需用户明确授权。
 
-## 分组（零 LLM 配置）
-- 脚本只做抓取+写文件，**不接 AI**。
-- 分组由 **WorkBuddy 当前对话窗口 AI** 读 MD 后做语义归类、回填 `category/tags`——用户无需自己配任何模型。
-
-## 依赖与运行
-```
-python -m venv .venv && .venv/Scripts/pip install curl_cffi xhshow
-python exporter.py            # 全量
-python exporter.py --limit 10 # 限量验证
-```
-- 若取 cookie 想零手动：装 `pywin32`，读 Edge 加密 Cookie 库（`%LOCALAPPDATA%\Microsoft\Edge\User Data\Default\Network\Cookies`）用 `win32crypt.CryptUnprotectData` 本地解密。**注意 Edge 运行时锁文件**（WinError 32）——需关闭 Edge 全部进程或手动复制。
-
-## 已知限制
-- 签名是逆向产物，小红书约每月轮换算法，`xhshow` 失效时跟其升级即可。
-- 调用私有 API 违反 XHS ToS，风险自担。
-- 本地解密 Cookie 脚本涉及本机凭证，仅本机运行、不落库外传。
+## 风险提示
+- 调用私有 API 违反 XHS ToS；签名约每月轮换（升级 `xhshow` 即可）。
+- 视频下载较大，默认 `link_only`；下载模式需用户明确开启。

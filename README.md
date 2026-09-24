@@ -1,90 +1,106 @@
 # xhs-favorites-to-obsidian
 
-纯 Python、零浏览器（无 Chromium / Playwright）把**你自己的小红书收藏夹**（图文 + 视频）导出为 Obsidian 可用的 Markdown 笔记，并自动按标题做分类打标签。
+纯 Python、零浏览器（不装 Chromium / 不跑自动化）把**小红书**内容导出为 **Obsidian** 笔记的命令行工具。
 
-- 不装浏览器、不跑无头引擎、不模拟翻收藏页 —— 签名在本地用纯 Python 计算。
-- 视频笔记按需求**只存元数据**（标题 / 链接 / 作者），不下载视频文件。
-- 图文笔记取正文 + 图片（webp）本地化，用 `![[...]]` 内联，Obsidian 直接可读可学。
-- 自带断点续传、限速风控、自动分类。
+> V2.0：从"单一收藏导出器"升级为**可配置、可插拔采集的多能力框架**——收藏 / 搜索 / 动态 / 发现 / 关注，全部可选、全部可配。
 
-> ⚠️ **合规声明**：小红书**没有官方开放收藏读取 API**，本项目调用的是平台私有 Web 接口，仅用于**个人备份与学习整理**自己的收藏，请遵守平台 ToS，勿用于批量爬取他人内容或商业用途。签名算法为社区逆向成果，平台改动后可能失效，届时升级 `xhshow` 即可。
+## 特性
 
-## 工作原理
-
-| 环节 | 做法 |
-|---|---|
-| 登录态 | 从已登录的浏览器取 `web_session` + `a1`（一次性，约 1 年有效），不下载任何东西 |
-| 签名 | `xhshow` 纯 Python 本地算 `x-s/x-t/x-s-common`，无需浏览器 / JS 运行时 |
-| 请求 | `curl_cffi`（Chrome 指纹 impersonate）发 HTTP —— **不能**用 `requests`，会被 Shield 按 JA3 指纹拉黑 |
-| 导出 | 枚举收藏 → 图文取详情 + 图片转 webp；视频仅元数据 → 写 Obsidian MD |
-
-### 关键接口（已验证）
-- 取自己的 `user_id`：`GET /api/sns/web/v2/user/me`
-- 枚举收藏：`GET /api/sns/web/v2/note/collect/page`（`user_id` + `cursor` 翻页，数据在 `data.notes`）
-- 笔记详情（图文取正文/图片）：**`POST /api/sns/web/v1/feed`**，body 用 `source_note_id` + `xsec_token`
+- **零浏览器**：用 `curl_cffi`（Chrome 指纹）发请求 + `xhshow`（纯 Python 逆向签名）算 `x-s/x-t/x-s-common`，签名在本地算，**不安装任何浏览器或 JS 运行时**。
+- **多采集能力**（可独立开关）：
+  - `favorites` 我的收藏 ✅ 已验证
+  - `search` 关键词搜索 ✅ 已验证
+  - `user_notes` 我的动态/笔记 ✅ 已验证
+  - `explore` 发现/推荐流 ✅ 已验证
+  - `following` 关注流 ✅ 已验证
+- **完全可配置**：频率、媒体策略、后处理全部由 `config.yaml` 或 CLI 决定，默认值安全（≤25 次/分、单线程）。
+- **视频可选**：`link_only`（仅标题+链接，默认）或 `download`（下载 mp4，已验证可行）。
+- **自动分组**：确定性关键词打分，把笔记按主题（AI/旅行/穿搭…）归类、回填 `category/tags`，并生成分类索引。
+- **断点续传**：`state.json` 记录已导出条目，中断可续。
+- **数据本地**：全程本地，不外传；`secrets/` 已被 `.gitignore` 排除。
 
 ## 安装
 
 ```bash
-git clone https://github.com/FrankChen668/xhs-favorites-to-obsidian.git
-cd xhs-favorites-to-obsidian
-python -m venv .venv && .venv/Scripts/pip install -r requirements.txt
-cp config.example.yaml config.yaml   # 填写你的 output_dir
+python -m venv venv && venv/Scripts/python -m pip install -r requirements.txt
 ```
 
-## 获取 Cookie（三种方式）
+依赖：`curl_cffi`、`xhshow`、`pyyaml`、`pillow`。
 
-1. **自动提取（Windows，推荐）**：装 `pywin32` 后运行 `python src/extract_edge_cookies.py`，它会读取本机 Edge 加密 Cookie 库并本地解密，自动写出 `secrets/cookies.json`（**不外传**）。
-2. **DevTools 手动**：Edge 打开 xiaohongshu.com 并登录 → F12 → 应用程序 → Cookies → `https://www.xiaohongshu.com` → 复制 `web_session`（httpOnly，Console 取不到）和 `a1`。
-3. **Cookie-Editor 扩展**：装扩展 → Export JSON → 取出 `web_session` / `a1`。
+## 获取 Cookie
 
-> `web_session` 是 httpOnly，必须走面板 / 扩展 / 自动脚本，不能用 `document.cookie`。
+两种方式（任选其一）：
 
-把值写进 `secrets/cookies.json`：
-```json
-{ "web_session": "xxxx", "a1": "yyyy", "user_id": "你的user_id(可选，脚本会自动取)" }
+1. **自动脚本**（需本机 Edge/Chrome 关闭或允许读其加密 Cookie 库）：
+   ```bash
+   python src/extract_edge_cookies.py      # 自动抽出 web_session + a1 写入 secrets/cookies.json
+   ```
+   > 注意：若 Edge/Chrome 正在运行并锁住 Cookie 数据库，脚本会失败，需先完全退出浏览器进程。
+2. **手动**：Edge/Chrome 打开 xiaohongshu.com 并登录 → F12 → 应用程序 → Cookies → `https://www.xiaohongshu.com` → 复制 `web_session`（httpOnly，Application 面板才能取到）和 `a1` → 写入：
+   ```json
+   {"web_session": "xxx", "a1": "yyy", "user_id": "你的user_id"}
+   ```
+   `user_id` 可留空，工具首次运行会从接口补全；也可手动填（见下方"获取 user_id"）。
+
+## 配置
+
+复制示例并修改：
+
+```bash
+cp config.example.yaml config.yaml
+# 编辑 config.yaml：至少确认 output_dir、按需开启 collectors
 ```
 
 ## 使用
 
 ```bash
-# 连通性探针（只读一页，不动收藏）
-python src/probe.py
+# 默认：按 config.yaml 跑全部 enabled 采集器（默认仅 favorites）
+python -m src.main
 
-# 全量导出
-python src/exporter.py
+# 仅收藏，限速降到 15 次/分，不下载图片
+python -m src.main --rate-limit.requests-per-min 15 --media.images.enabled false
 
-# 限量验证（前 10 条）
-python src/exporter.py --limit 10
+# 跑搜索（临时覆盖，不改动 yaml）
+python -m src.main --collectors.search.enabled true --collectors.search.keywords "AI Agent" "Obsidian" --collectors.favorites.enabled false
 
-# 按标题自动分类 + 打标签，并重建带「分类」列的 index.md
-python src/classify.py
+# 视频改为下载模式
+python -m src.main --media.video.mode download --media.video.max-size-mb 300
+
+# 跳过所有后处理（只要原始导出）
+python -m src.main --post_process.auto-classify false --post_process.regenerate-index false
 ```
 
-导出目录结构：
+所有配置项均支持 `--点分.路径 值` 覆盖（见 `config.example.yaml`）。
+
+## 在 Obsidian 中使用
+
+把 `output_dir` 指向你的 vault 子目录（或直接就是 vault），Obsidian 打开即是标准 Markdown。
+- 笔记含 `status: unstudied`（待学）/ `studying` / `done`，适合"逐个学习"追踪；
+- 装 **Dataview** 插件后，可用 `status` 字段做"待学 → 已学"看板；学完一篇改 `status: done` 并填 `review_date`。
+
+## 合规与风控
+
+- 调用小红书私有 API 抓取**违反其平台 ToS**，使用者需自担风险。
+- 默认 ≤25 次/分、单线程、顺序翻页、随机延迟、固定设备指纹、本人住宅 IP——属低频个人使用，风险低非零；最糟后果是限流/重登/滑块，非封号。
+- 仅处理**本人收藏/动态**与**公开内容**；不爬取他人隐私数据。
+- 签名算法来自社区逆向（`xhshow`），约每月轮换，失效后 `pip install -U xhshow` 升级即可。
+- 本项目为学习/个人备份用途，请勿大规模搬运或二次发布他人内容。
+
+## 项目结构
+
 ```
-<output_dir>/
-  ├── 笔记标题_resourceId.md      # 图文：正文 + ![[images/xxx.webp]]
-  ├── 视频标题_resourceId.md      # 视频：仅元数据
-  ├── images/                     # 图片 webp 本地化
-  └── index.md                    # 按分类分组的索引
+src/
+  client.py             # 传输层：签名 + 限速 + 重试/退避 + 熔断 + cookie
+  config.py             # 配置加载与 CLI 覆盖
+  collectors/           # 可插拔采集器（favorites/search/user_notes/feed）
+  media.py              # 图片转 webp + 视频下载
+  exporter.py           # 写 Obsidian MD + frontmatter
+  classify.py           # 自动分组打标签
+  extract_edge_cookies.py  # 本机浏览器 Cookie 自动提取
+  probe_endpoints.py / probe_struct.py  # 开发用端点验证
+  main.py               # 入口
 ```
 
-每篇笔记 frontmatter 含 `status: unstudied` / `category` / `tags` / `xsec_token`，配合 Obsidian + Dataview 即可做「待学 / 已学」看板。
+## License
 
-## 风控（务必保留）
-- 单线程 + 随机 2–5s 间隔 + 滑动窗口 ≤20 次/分（远低于 100/分触发线）。
-- cursor 顺序翻页、不并发、不跳页。
-- 本人住宅 IP + 本人收藏 → 风险低（最糟是限流 / 滑块，非封号）。
-- `state.json` 支持中断后续传。
-
-## 能力拓展（不仅限于收藏）
-签名层是通用的：任何 XHS 私有接口都能用 `xhshow` 签名后调用，因此本方案可横向拓展：
-- **搜索**：`GET /api/sns/web/v1/search/notes?keyword=...`
-- **发现 / 热点**：`GET /api/sns/web/v1/feed`（发现页流）
-- **关注流 / 用户主页**：对应用户动态 / 关注接口
-
-这些端点需要进一步逆向参数，欢迎 PR。
-
-## 许可证
-[MIT](LICENSE)
+MIT

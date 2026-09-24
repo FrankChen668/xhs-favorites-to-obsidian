@@ -1,13 +1,70 @@
-# 小红书收藏 → Obsidian 导出配置（示例）
-# 复制为 config.yaml 后填写你自己的路径
-output_dir: "F:/Obsidian/小红书"   # 你的 Obsidian vault 目录或子目录
-cookie_file: "secrets/cookies.json"
+# 小红书 → Obsidian 导出工具 配置示例（V2）
+# 复制为 config.yaml 后修改；所有项均可被 CLI 点分覆盖，如：
+#   python -m src.main --rate-limit.requests-per-min 15 --collectors.search.enabled true
 
-rate:
-  min_delay: 2        # 请求间隔下限（秒）
-  max_delay: 5        # 请求间隔上限（秒，随机）
-  max_per_min: 20     # 滑动窗口：60s 内最多请求数（远低于 100/分触发线）
+# === 凭证 ===
+cookie_file: secrets/cookies.json        # 必须含 web_session + a1 + user_id
 
-image:
-  max_width: 720      # 图片下载最大宽度（省空间）；可调 1080
-  format: webp
+# === 输出 ===
+output_dir: ./vault                      # Obsidian vault 目录或子目录
+index_file: index.md                     # 总索引文件名（空字符串=不生成）
+
+# === 传输层 / 风控（全部可调，安全下限 5 次/分）===
+rate_limit:
+  requests_per_min: 20                    # 滑动窗口上限。安全带 10–25，默认沿用 V1
+  min_delay: 2.0                          # 随机延迟下限(秒)，去机械性
+  max_delay: 5.0                          # 随机延迟上限(秒)
+  concurrency: 1                          # 并发（默认 1；>1 风险显著上升）
+  backoff:
+    max_retries: 3                        # 遇风控码重试次数
+    base_seconds: 10                      # 指数退避基数
+    trigger_codes: [412, 461, 300012]     # 触发退避的返回码
+  circuit_breaker:                        # 连败熔断，防账号风险
+    fail_threshold: 3
+    pause_minutes: 15
+
+# === 采集器（可插拔、可独立开关；默认仅 favorites 开）===
+collectors:
+  favorites:
+    enabled: true                         # 我的收藏（必填 user_id）
+    num_per_page: 30
+  search:
+    enabled: false                        # 关键词搜索
+    keywords: []                          # 例: ["AI Agent", "Obsidian"]
+    max_pages: 5
+    sort: general                         # general | latest | most_comment | most_like
+  user_notes:
+    enabled: false                        # 我的动态/笔记（单用户）
+    target_user_id: ""                    # 空=用 cookie 的 user_id；或填他人 id
+    num_per_page: 30
+  explore:
+    enabled: false                        # 发现/推荐流
+    channel: recommend                    # recommend(推荐) — 占位，实际走 homefeed discover_feed
+    max_pages: 5
+  following:
+    enabled: false                        # 关注流（关注的人发的笔记）
+    max_pages: 5
+
+# === 媒体处理 ===
+media:
+  images:
+    enabled: true
+    format: webp                          # webp | jpg | keep(原格式)
+    max_width: 1080                       # 720 更省空间
+    quality: 82
+    skip_if_no_text: false
+  video:
+    mode: link_only                       # link_only(仅标题+链接) | download(下载 mp4)
+    download_dir: videos
+    max_size_mb: 500                      # 超过则跳过下载，仅留链接
+    expire_buffer_min: 30                 # CDN 签名 URL 到期前缓冲（防下载途中失效）
+
+# === 后处理（全部可选）===
+post_process:
+  auto_classify: true                     # 拉取后自动分组打标签（写 category/tags）
+  regenerate_index: true                  # 重新生成 index.md（按分类分组）
+  dataview_board: false                   # 额外生成 Dataview 看板 md（status 看板）
+
+# === 运行态 ===
+resume: true                              # state.json 断点续传
+log_level: INFO                          # DEBUG | INFO | WARNING

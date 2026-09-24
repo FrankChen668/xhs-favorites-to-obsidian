@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-对 F:/Obsidian/小红书 下所有收藏 MD 做分类与打标签（确定性、可复现）。
+分类与打标签（确定性、可复现）。V2 重构为可导入模块：
+  from . import classify; classify.run(output_dir)
 - 读取每个 MD 的 frontmatter（category / tags）
 - 基于标题关键词打分，选出 top1 分类 + 提取 tags
 - 回写 frontmatter，并重新生成带「分类」列的 index.md
 仅改 frontmatter 两行，不动正文。
 """
-import os, re, glob
+import os
+import re
+import glob
+from collections import defaultdict
 
-BASE = r"F:/Obsidian/小红书"
+DEFAULT_BASE = r"F:/Obsidian/小红书"
 
-# 分类关键词表（读完全部 587 条标题后归纳）。打分=命中关键词数，取最高分类。
 CATS = {
     "AI技术工程": ["agent","llm","大模型","multi-agent","多agent","rag","向量","知识库","ontology",
         "本体","transformer","微调","推理","记忆系统","graph","loop","harness","prompt","mcp",
@@ -59,7 +62,6 @@ CATS = {
         "送礼","办事","拍照","人像","童年","江南春","生猪","东大"],
 }
 
-# 每个分类下可提取为 tag 的代表词（更细）
 TAG_WORDS = {
     "AI技术工程": ["Agent","LLM","RAG","Codex","MCP","Graph","架构","记忆系统","向量库","提示词","VibeCoding"],
     "AI产品PM": ["产品经理","PRD","原型","求职","面试","用户研究","解决方案"],
@@ -74,41 +76,26 @@ TAG_WORDS = {
     "数码与其他": ["数码","储能","产业链","租房","交通","设计"],
 }
 
+
 def classify(title):
-    t = title.lower()
+    t = (title or "").lower()
     scores = {}
     for cat, kws in CATS.items():
-        s = 0
-        for kw in kws:
-            if kw.lower() in t:
-                s += 1
+        s = sum(1 for kw in kws if kw.lower() in t)
         if s > 0:
             scores[cat] = s
     if not scores:
         return "未分类", []
-    # 取最高分；并列时按 CATS 定义顺序（更具体的优先靠后定义会被先匹配？这里取首个最高）
     best = max(scores, key=lambda c: (scores[c], -list(CATS).index(c)))
-    tags = []
-    for w in TAG_WORDS.get(best, []):
-        if w.lower() in t or any(kw.lower() in t for kw in CATS[best] if w.lower() in kw.lower()):
-            tags.append(w)
-    # 补充：从标题里抓到该分类的代表词就作为 tag
-    extra = []
-    for cat, kws in CATS.items():
-        if cat == best:
-            for kw in kws:
-                # 仅取长度>=2且为显式主题词
-                if len(kw) >= 2 and kw.lower() in t and kw.lower() not in [x.lower() for x in extra]:
-                    # 映射到可读 tag
-                    pass
+    tags = [w for w in TAG_WORDS.get(best, []) if w.lower() in t]
     return best, tags[:4]
+
 
 def update_frontmatter(path, category, tags):
     with open(path, encoding="utf-8") as f:
         lines = f.read().split("\n")
     if not (lines and lines[0].strip() == "---"):
         return False
-    # 找 frontmatter 区间
     end = None
     for i in range(1, len(lines)):
         if lines[i].strip() == "---":
@@ -117,16 +104,13 @@ def update_frontmatter(path, category, tags):
     if end is None:
         return False
     out = []
-    replaced_cat = False
-    replaced_tags = False
+    replaced_cat = replaced_tags = False
     for i in range(1, end):
         line = lines[i]
         if re.match(r"^category\s*:", line) and not replaced_cat:
-            out.append(f"category: {category}")
-            replaced_cat = True
+            out.append(f"category: {category}"); replaced_cat = True
         elif re.match(r"^tags\s*:", line) and not replaced_tags:
-            tagstr = "[" + ", ".join(tags) + "]" if tags else "[]"
-            out.append(f"tags: {tagstr}")
+            out.append("tags: [" + ", ".join(tags) + "]" if tags else "tags: []")
             replaced_tags = True
         else:
             out.append(line)
@@ -134,71 +118,55 @@ def update_frontmatter(path, category, tags):
         out.append(f"category: {category}")
     if not replaced_tags:
         out.append("tags: []")
-    new_lines = lines[:1] + out + lines[end:]
-    with open(path, "w", encoding="utf-8") as f:
-        f.write("\n".join(new_lines))
+    open(path, "w", encoding="utf-8").write("\n".join(lines[:1] + out + lines[end:]))
     return True
 
-def main():
-    files = glob.glob(os.path.join(BASE, "*.md"))
-    files = [f for f in files if os.path.basename(f) != "index.md"]
-    dist = {}
-    total = 0
-    samples = []
-    for f in files:
-        with open(f, encoding="utf-8") as fh:
-            txt = fh.read()
-        m = re.search(r"^title:\s*(.+)$", txt, re.MULTILINE)
-        title = m.group(1).strip().strip('"') if m else os.path.basename(f)
-        cat, tags = classify(title)
-        ok = update_frontmatter(f, cat, tags)
-        dist[cat] = dist.get(cat, 0) + 1
-        total += 1
-        if len(samples) < 3:
-            samples.append((title[:30], cat, tags))
-    # 输出分布
-    print(f"[*] 已分类 {total} 篇")
-    print("[*] 分类分布：")
-    for cat, n in sorted(dist.items(), key=lambda x: -x[1]):
-        print(f"    {cat}: {n}")
-    # 重新生成 index.md（带分类列）
-    regen_index()
 
-def regen_index():
-    files = glob.glob(os.path.join(BASE, "*.md"))
-    files = [f for f in files if os.path.basename(f) != "index.md"]
+def regen_index(output_dir):
+    files = [f for f in glob.glob(os.path.join(output_dir, "*.md")) if os.path.basename(f) != "index.md"]
     rows = []
     for f in files:
-        with open(f, encoding="utf-8") as fh:
-            txt = fh.read()
+        txt = open(f, encoding="utf-8").read()
         d = {}
-        for key in ["title","type","author","category","tags","link","resourceId"]:
+        for key in ["title", "type", "author", "category", "tags", "link", "resourceId"]:
             m = re.search(rf"^{key}:\s*(.+)$", txt, re.MULTILINE)
             d[key] = m.group(1).strip().strip('"') if m else ""
-        base = os.path.splitext(os.path.basename(f))[0]
+        d["_base"] = os.path.splitext(os.path.basename(f))[0]
         rows.append(d)
-    # 按分类分组
-    from collections import defaultdict
     groups = defaultdict(list)
     for d in rows:
-        groups[d.get("category","未分类")].append(d)
-    lines = ["---", "tags: xhs-favorites-index", "---", "# 小红书收藏索引（已分类）", "",
-             f"总数：{len(rows)}", ""]
+        groups[d.get("category", "未分类")].append(d)
+    lines = ["---", "tags: xhs-index", "---", "# 小红书导出索引（已分类）", "",
+             f"总数：{len(rows)}（图文 {sum(1 for r in rows if r.get('type')!='video')} / 视频 {sum(1 for r in rows if r.get('type')=='video')}）", ""]
     for cat in sorted(groups, key=lambda c: -len(groups[c])):
         lines.append(f"## {cat}（{len(groups[cat])}）")
         lines.append("")
-        lines.append("| 类型 | 分类 | 标题 | 标签 |")
+        lines.append("| 类型 | 标题 | 标签 | 文件 |")
         lines.append("| --- | --- | --- | --- |")
         for d in groups[cat]:
-            t = d.get("type","")
-            title = d.get("title","")
-            tags = d.get("tags","")
-            link = d.get("link","")
-            lines.append(f"| {t} | {cat} | [{title}]({link}) | {tags} |")
+            lines.append(f"| {d.get('type','')} | {d.get('title','')} | {d.get('tags','')} | [[{d.get('_base','')}]] |")
         lines.append("")
-    with open(os.path.join(BASE, "index.md"), "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
-    print(f"[*] index.md 已重新生成（{len(rows)} 篇，按分类分组）")
+    open(os.path.join(output_dir, "index.md"), "w", encoding="utf-8").write("\n".join(lines) + "\n")
+
+
+def run(output_dir: str = DEFAULT_BASE):
+    files = [f for f in glob.glob(os.path.join(output_dir, "*.md")) if os.path.basename(f) != "index.md"]
+    dist = {}
+    total = 0
+    for f in files:
+        txt = open(f, encoding="utf-8").read()
+        m = re.search(r"^title:\s*(.+)$", txt, re.MULTILINE)
+        title = m.group(1).strip().strip('"') if m else os.path.basename(f)
+        cat, tags = classify(title)
+        update_frontmatter(f, cat, tags)
+        dist[cat] = dist.get(cat, 0) + 1
+        total += 1
+    regen_index(output_dir)
+    print(f"[*] 已分类 {total} 篇，分布：")
+    for cat, n in sorted(dist.items(), key=lambda x: -x[1]):
+        print(f"    {cat}: {n}")
+    return dist
+
 
 if __name__ == "__main__":
-    main()
+    run(DEFAULT_BASE)

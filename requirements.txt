@@ -1,9 +1,5 @@
-# 核心依赖（必须）
 curl_cffi>=0.16
 xhshow>=0.1.0
-
-# 可选：从本机 Edge/Chrome 自动提取 cookie（Windows）
-pywin32>=306
-
-# 可选：若 exporter 改用 yaml.safe_load 读取配置
-# pyyaml>=6.0
+pyyaml>=6.0
+pillow>=10.0
+pywin32>=306; sys_platform == 'win32'

@@ -77,6 +77,7 @@ python -m src.main --post_process.auto-classify false --post_process.regenerate-
 把 `output_dir` 指向你的 vault 子目录（或直接就是 vault），Obsidian 打开即是标准 Markdown。
 - 笔记含 `status: unstudied`（待学）/ `studying` / `done`，适合"逐个学习"追踪；
 - 装 **Dataview** 插件后，可用 `status` 字段做"待学 → 已学"看板；学完一篇改 `status: done` 并填 `review_date`。
+- 仓库根目录 [`dataview-board.md`](./dataview-board.md) 是一份现成的看板模板（待学清单 / 分类分布 / 视频笔记 / 按标签筛选 / 按分类下钻），复制到 vault 并把 `FROM "小红书"` 改成你的实际文件夹即可用。
 
 ## 合规与风控
 
@@ -97,8 +98,9 @@ src/
   exporter.py           # 写 Obsidian MD + frontmatter
   classify.py           # 自动分组打标签
   extract_edge_cookies.py  # 本机浏览器 Cookie 自动提取
-  probe_endpoints.py / probe_struct.py  # 开发用端点验证
   main.py               # 入口
+dev/                   # 开发/调试用脚本（端点验证探针，非运行必需）
+  probe_endpoints.py / probe_struct.py
 ```
 
 ## License
